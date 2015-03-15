@@ -104,7 +104,7 @@ Now power on the BBB and connect ftdi cable. You can connect 3 cables.
 [Reference](http://inspire.logicsupply.com/p/serial-connection-j1.html) 
 
 Now after connecting usb to pc execute command in terminal.
-
+<pre><code>sudo apt-get install picocom </pre></code>
 <pre><code>picocom -b 115200 /dev/ttyUSB0</pre></code>
 
 Here you can see my setup on 
