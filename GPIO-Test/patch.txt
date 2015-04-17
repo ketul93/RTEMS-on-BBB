@@ -1,0 +1,423 @@
+commit 67a0aafa3b2e66419143f0acd65df3c9bd3498a0
+Author: ketul93 <ketulshah1993@gmail.com>
+Date:   Fri Apr 17 16:59:45 2015 +0530
+
+    GPIO driver developement and simple USR LEDs demo on BeagleBone Black
+
+diff --git a/c/src/lib/libbsp/arm/beagle/Makefile.am b/c/src/lib/libbsp/arm/beagle/Makefile.am
+index abef8ba..56f1afb 100644
+--- a/c/src/lib/libbsp/arm/beagle/Makefile.am
++++ b/c/src/lib/libbsp/arm/beagle/Makefile.am
+@@ -39,6 +39,8 @@ include_bsp_HEADERS += ../shared/include/arm-release-id.h
+ include_bsp_HEADERS += ../shared/include/start.h
+ include_bsp_HEADERS += include/irq.h
+ include_bsp_HEADERS += include/i2c.h
++include_bsp_HEADERS += include/beagleboard.h
++include_bsp_HEADERS += include/gpio.h
+ 
+ include_libcpu_HEADERS =
+ include_libcpu_HEADERS += ../../../libcpu/arm/shared/include/arm-cp15.h
+@@ -110,6 +112,10 @@ libbsp_a_SOURCES += ../../shared/console.c \
+         ../../shared/console_read.c \
+         ../../shared/console_write.c \
+         ../../shared/console_control.c
++# GPIO
++
++libbsp_a_SOURCES += gpio/gpio.c
++
+ 
+ # I2C
+ libbsp_a_SOURCES += misc/i2c.c
+diff --git a/c/src/lib/libbsp/arm/beagle/gpio/gpio.c b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
+new file mode 100644
+index 0000000..4c67020
+--- /dev/null
++++ b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
+@@ -0,0 +1,66 @@
++/**
++ * @file
++ *
++ * @ingroup arm_beagle
++ *
++ * @brief Global BSP definitions.
++ */
++
++/*
++ * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++
++ * The license and distribution terms for this file may be
++ * found in the file LICENSE in this distribution or at
++ * http://www.rtems.org/license/LICENSE.
++ */
++
++#include <bsp/beagleboard.h>
++#include <bsp/irq.h>
++#include <bsp/gpio.h>
++#include <bsp.h>
++
++#include <stdlib.h>
++#include <stdint.h>
++
++int is_initialized = 0;
++
++void gpio_initialize(void)
++{	
++   if ( is_initialized )
++    return;
++
++  is_initialized = 1;
++  write32(AM335X_GPIO1_BASE +GPIO_OE,0x00000000);  //Enabling GPIO1 pins as OUTPUT PINs
++}
++
++
++ void gpio_set_value(unsigned gpio, int value)
++{
++
++   	if (value)
++		{
++			uint8_t tmp = readb(AM335X_GPIO1_BASE + gpio/8+GPIO_SETDATAOUT);
++			 tmp |= (1 << gpio%8);
++			 writeb(tmp, AM335X_GPIO1_BASE + gpio/8+GPIO_SETDATAOUT);
++		}
++	else
++		{
++			uint8_t tmp = readb(AM335X_GPIO1_BASE + gpio/8+GPIO_CLEARDATAOUT);
++			tmp |= (1 << gpio%8);
++			writeb(tmp, AM335X_GPIO1_BASE + gpio/8+GPIO_CLEARDATAOUT);
++
++		}
++
++}
++
++void allgpioset(void)
++{
++printf("Setting all gpio1\n");
++write32(AM335X_GPIO1_BASE +GPIO_SETDATAOUT,0xFFFFFFFF);
++}
++
++void allgpioclr(void)
++{
++printf("Clearing all gpio1\n");
++write32(AM335X_GPIO1_BASE+GPIO_CLEARDATAOUT,0xFFFFFFFF);
++}
+diff --git a/c/src/lib/libbsp/arm/beagle/include/beagleboard.h b/c/src/lib/libbsp/arm/beagle/include/beagleboard.h
+new file mode 100644
+index 0000000..c5eff7e
+--- /dev/null
++++ b/c/src/lib/libbsp/arm/beagle/include/beagleboard.h
+@@ -0,0 +1,38 @@
++/**
++ * @file
++ *
++ * @ingroup arm_beagle
++ *
++ * @brief Global BSP definitions.
++ */
++
++/*
++ * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++
++ * The license and distribution terms for this file may be
++ * found in the file LICENSE in this distribution or at
++ * http://www.rtems.org/license/LICENSE.
++ */
++
++#ifndef LIBBSP_ARM_BEAGLE_H
++#define LIBBSP_ARM_BEAGLE_H
++
++#include <stdint.h>
++#include <bsp/utility.h>
++
++/* GPIO Memory Registers */
++#define GPIO_REGISTER_SIZE (4)
++
++#define AM335X_GPIO0_BASE 		(0x44E07000)
++#define AM335X_GPIO1_BASE		(0x4804C000)
++#define AM335X_GPIO2_BASE		(0x481AC000)
++#define AM335X_GPIO3_BASE		(0x481AE000)
++
++#define GPIO_CLEARDATAOUT (0x190)
++#define GPIO_SETDATAOUT   (0x194)
++#define GPIO_OE		  (0x134)
++#define GPIO_DATAOUT      (0x13C)
++#define GPIO_DATAIN       (0x138)
++
++
++#endif
+diff --git a/c/src/lib/libbsp/arm/beagle/include/gpio.h b/c/src/lib/libbsp/arm/beagle/include/gpio.h
+new file mode 100644
+index 0000000..e59d1cb
+--- /dev/null
++++ b/c/src/lib/libbsp/arm/beagle/include/gpio.h
+@@ -0,0 +1,37 @@
++/**
++ * @file
++ *
++ * @ingroup arm_beagle
++ *
++ * @brief Global BSP definitions.
++ */
++
++/*
++ * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++
++ * The license and distribution terms for this file may be
++ * found in the file LICENSE in this distribution or at
++ * http://www.rtems.org/license/LICENSE.
++ */
++
++#ifndef LIBBSP_ARM_BEAGLE_GPIO_H
++#define LIBBSP_ARM_BEAGLE_GPIO_H
++
++#include <rtems.h>
++#include "beagleboard.h"
++
++#include <rtems.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif /* __cplusplus */
++
++extern void gpio_initialize(void);
++
++extern void allgpioset(void);
++
++extern void allgpioclr(void);
++
++extern void gpio_set_value(unsigned gpio, int value);
++
++#endif /* LIBBSP_ARM_BEAGLE_GPIO_H */
+diff --git a/c/src/lib/libbsp/arm/beagle/preinstall.am b/c/src/lib/libbsp/arm/beagle/preinstall.am
+index dd1ec95..6961630 100644
+--- a/c/src/lib/libbsp/arm/beagle/preinstall.am
++++ b/c/src/lib/libbsp/arm/beagle/preinstall.am
+@@ -110,6 +110,14 @@ $(PROJECT_INCLUDE)/bsp/i2c.h: include/i2c.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
+ 	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/i2c.h
+ PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/i2c.h
+ 
++$(PROJECT_INCLUDE)/bsp/beagleboard.h: include/beagleboard.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
++	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/beagleboard.h
++PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/beagleboard.h
++
++$(PROJECT_INCLUDE)/bsp/gpio.h: include/gpio.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
++	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/gpio.h
++PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/gpio.h
++
+ $(PROJECT_INCLUDE)/libcpu/arm-cp15.h: ../../../libcpu/arm/shared/include/arm-cp15.h $(PROJECT_INCLUDE)/libcpu/$(dirstamp)
+ 	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
+ PREINSTALL_FILES += $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
+diff --git a/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img
+new file mode 100644
+index 0000000..d45fd3a
+Binary files /dev/null and b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img differ
+diff --git a/c/src/lib/libbsp/arm/beagle/startup/bspstart.c b/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
+index b156564..9d92b95 100644
+--- a/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
++++ b/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
+@@ -16,6 +16,7 @@
+ #include <bsp/bootcard.h>
+ #include <bsp/irq-generic.h>
+ 
++
+ void bsp_start(void)
+ {
+ #if IS_DM3730
+diff --git a/c/src/lib/libbsp/bfin/acinclude.m4 b/c/src/lib/libbsp/bfin/acinclude.m4
+index ab6082e..828fd89 100644
+--- a/c/src/lib/libbsp/bfin/acinclude.m4
++++ b/c/src/lib/libbsp/bfin/acinclude.m4
+@@ -2,12 +2,12 @@
+ AC_DEFUN([RTEMS_CHECK_BSPDIR],
+ [
+   case "$1" in
+-  TLL6527M )
+-    AC_CONFIG_SUBDIRS([TLL6527M]);;
+   bf537Stamp )
+     AC_CONFIG_SUBDIRS([bf537Stamp]);;
+   eZKit533 )
+     AC_CONFIG_SUBDIRS([eZKit533]);;
++  TLL6527M )
++    AC_CONFIG_SUBDIRS([TLL6527M]);;
+   *)
+     AC_MSG_ERROR([Invalid BSP]);;
+   esac
+diff --git a/c/src/lib/libbsp/powerpc/acinclude.m4 b/c/src/lib/libbsp/powerpc/acinclude.m4
+index 6442399..e46fa2b 100644
+--- a/c/src/lib/libbsp/powerpc/acinclude.m4
++++ b/c/src/lib/libbsp/powerpc/acinclude.m4
+@@ -38,12 +38,12 @@ AC_DEFUN([RTEMS_CHECK_BSPDIR],
+     AC_CONFIG_SUBDIRS([t32mppc]);;
+   tqm8xx )
+     AC_CONFIG_SUBDIRS([tqm8xx]);;
+-  virtex )
+-    AC_CONFIG_SUBDIRS([virtex]);;
+   virtex4 )
+     AC_CONFIG_SUBDIRS([virtex4]);;
+   virtex5 )
+     AC_CONFIG_SUBDIRS([virtex5]);;
++  virtex )
++    AC_CONFIG_SUBDIRS([virtex]);;
+   *)
+     AC_MSG_ERROR([Invalid BSP]);;
+   esac
+diff --git a/testsuites/samples/Makefile.am b/testsuites/samples/Makefile.am
+index 08455d3..de4f351 100644
+--- a/testsuites/samples/Makefile.am
++++ b/testsuites/samples/Makefile.am
+@@ -1,6 +1,6 @@
+ ACLOCAL_AMFLAGS = -I ../aclocal
+ 
+-_SUBDIRS = hello capture ticker base_sp unlimited minimum fileio
++_SUBDIRS = hello capture ticker base_sp unlimited minimum fileio gpio
+ 
+ if MPTESTS
+ ## base_mp is a sample multiprocessing test
+diff --git a/testsuites/samples/configure.ac b/testsuites/samples/configure.ac
+index e6f12d0..ac32583 100644
+--- a/testsuites/samples/configure.ac
++++ b/testsuites/samples/configure.ac
+@@ -60,6 +60,7 @@ AC_CHECK_SIZEOF([time_t])
+ AC_CONFIG_FILES([Makefile
+ base_sp/Makefile
+ hello/Makefile
++gpio/Makefile
+ loopback/Makefile
+ minimum/Makefile
+ fileio/Makefile
+diff --git a/testsuites/samples/gpio/Makefile.am b/testsuites/samples/gpio/Makefile.am
+new file mode 100644
+index 0000000..d6009c8
+--- /dev/null
++++ b/testsuites/samples/gpio/Makefile.am
+@@ -0,0 +1,20 @@
++
++rtems_tests_PROGRAMS = gpio
++gpio_SOURCES = init.c
++
++dist_rtems_tests_DATA = gpio.scn
++dist_rtems_tests_DATA += gpio.doc
++
++include $(RTEMS_ROOT)/make/custom/@RTEMS_BSP@.cfg
++include $(top_srcdir)/../automake/compile.am
++include $(top_srcdir)/../automake/leaf.am
++
++
++LINK_OBJS = $(gpio_OBJECTS)
++LINK_LIBS = $(gpio_LDLIBS)
++
++gpio$(EXEEXT): $(gpio_OBJECTS) $(gpio_DEPENDENCIES)
++	@rm -f gpio$(EXEEXT)
++	$(make-exe)
++
++include $(top_srcdir)/../automake/local.am
+diff --git a/testsuites/samples/gpio/gpio.doc b/testsuites/samples/gpio/gpio.doc
+new file mode 100644
+index 0000000..9812864
+--- /dev/null
++++ b/testsuites/samples/gpio/gpio.doc
+@@ -0,0 +1,9 @@
++#  COPYRIGHT (c) 1989-1999.
++#  On-Line Applications Research Corporation (OAR).
++#
++#  The license and distribution terms for this file may be
++#  found in the file LICENSE in this distribution or at
++#  http://www.rtems.org/license/LICENSE.
++#
++
++
+diff --git a/testsuites/samples/gpio/gpio.scn b/testsuites/samples/gpio/gpio.scn
+new file mode 100644
+index 0000000..7dd6804
+--- /dev/null
++++ b/testsuites/samples/gpio/gpio.scn
+@@ -0,0 +1,3 @@
++*** GPIO TEST ***
++Gpio Test
++*** END OF GPIO TEST ***
+diff --git a/testsuites/samples/gpio/init.c b/testsuites/samples/gpio/init.c
+new file mode 100644
+index 0000000..8514ed3
+--- /dev/null
++++ b/testsuites/samples/gpio/init.c
+@@ -0,0 +1,81 @@
++/*
++ *  COPYRIGHT (c) 1989-2012.
++ *  On-Line Applications Research Corporation (OAR).
++ *
++ *  The license and distribution terms for this file may be
++ *  found in the file LICENSE in this distribution or at
++ *  http://www.rtems.org/license/LICENSE.
++ */
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++#include <rtems.h>
++#include <rtems/test.h>
++
++#include <bsp/gpio.h> /* Calls the BSP gpio library */
++#include <rtems/status-checks.h>
++
++#include <stdio.h>
++#include <stdlib.h>
++
++void inline delaysec(float sec)
++{
++rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
++}
++
++/*Function for USR LEDs demo.*/
++
++void inline gpio_auto()
++{
++/*Generating some patterns*/
++allgpioset();
++delaysec(1);
++allgpioclr();
++gpio_set_value(22,1);gpio_set_value(24,1);
++delaysec(0.4);
++gpio_set_value(22,1);gpio_set_value(24,0);
++delaysec(0.3);
++gpio_set_value(21,1);gpio_set_value(23,1);
++delaysec(0.5);
++gpio_set_value(22,0);gpio_set_value(24,0);
++delaysec(0.2);
++gpio_set_value(22,1);
++delaysec(0.2);
++allgpioclr();
++delaysec(0.1);
++}
++
++rtems_task Init(rtems_task_argument argument);
++
++const char rtems_test_name[] = "GPIO TEST";
++
++rtems_task Init(
++  rtems_task_argument ignored
++)
++{
++  rtems_test_begin();
++  printf("GPIO Testing started\n");
++  gpio_initialize();
++  allgpioclr();
++  gpio_auto();
++  printf( "GPIO TEST by Ketul\n" );
++  rtems_test_end();
++  exit( 0 );
++}
++
++
++/* NOTICE: the clock driver is explicitly disabled */
++#define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
++
++#define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
++
++#define CONFIGURE_MAXIMUM_TASKS            1
++#define CONFIGURE_USE_DEVFS_AS_BASE_FILESYSTEM
++
++#define CONFIGURE_RTEMS_INIT_TASKS_TABLE
++
++#define CONFIGURE_INITIAL_EXTENSIONS RTEMS_TEST_INITIAL_EXTENSION
++
++#define CONFIGURE_INIT
++#include <rtems/confdefs.h>
++
