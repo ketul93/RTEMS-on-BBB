@@ -1,39 +1,37 @@
-commit 67a0aafa3b2e66419143f0acd65df3c9bd3498a0
+commit e2484b80d8620cc78bf5f453e5cd904c7137a569
 Author: ketul93 <ketulshah1993@gmail.com>
-Date:   Fri Apr 17 16:59:45 2015 +0530
+Date:   Thu Apr 23 23:24:11 2015 +0530
 
-    GPIO driver developement and simple USR LEDs demo on BeagleBone Black
+    GPIO Driver developement with sample code
 
 diff --git a/c/src/lib/libbsp/arm/beagle/Makefile.am b/c/src/lib/libbsp/arm/beagle/Makefile.am
-index abef8ba..56f1afb 100644
+index abef8ba..ce1e270 100644
 --- a/c/src/lib/libbsp/arm/beagle/Makefile.am
 +++ b/c/src/lib/libbsp/arm/beagle/Makefile.am
-@@ -39,6 +39,8 @@ include_bsp_HEADERS += ../shared/include/arm-release-id.h
+@@ -39,6 +39,7 @@ include_bsp_HEADERS += ../shared/include/arm-release-id.h
  include_bsp_HEADERS += ../shared/include/start.h
  include_bsp_HEADERS += include/irq.h
  include_bsp_HEADERS += include/i2c.h
-+include_bsp_HEADERS += include/beagleboard.h
 +include_bsp_HEADERS += include/gpio.h
  
  include_libcpu_HEADERS =
  include_libcpu_HEADERS += ../../../libcpu/arm/shared/include/arm-cp15.h
-@@ -110,6 +112,10 @@ libbsp_a_SOURCES += ../../shared/console.c \
-         ../../shared/console_read.c \
+@@ -111,6 +112,9 @@ libbsp_a_SOURCES += ../../shared/console.c \
          ../../shared/console_write.c \
          ../../shared/console_control.c
+ 
 +# GPIO
-+
 +libbsp_a_SOURCES += gpio/gpio.c
 +
- 
  # I2C
  libbsp_a_SOURCES += misc/i2c.c
+ 
 diff --git a/c/src/lib/libbsp/arm/beagle/gpio/gpio.c b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
 new file mode 100644
-index 0000000..4c67020
+index 0000000..26c56f6
 --- /dev/null
 +++ b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,122 @@
 +/**
 + * @file
 + *
@@ -41,115 +39,128 @@ index 0000000..4c67020
 + *
 + * @brief Global BSP definitions.
 + */
-+
-+/*
++ 
++/**
 + * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
 +
 + * The license and distribution terms for this file may be
 + * found in the file LICENSE in this distribution or at
 + * http://www.rtems.org/license/LICENSE.
 + */
-+
-+#include <bsp/beagleboard.h>
++ 
++#include <libcpu/am335x.h>
++#include <rtems.h>
 +#include <bsp/irq.h>
 +#include <bsp/gpio.h>
 +#include <bsp.h>
-+
 +#include <stdlib.h>
 +#include <stdint.h>
++#define GPIO_PIN_COUNT 95
 +
-+int is_initialized = 0;
++static bool is_initialized = false;
 +
++static bbb_gpio_pin gpio_pin[GPIO_PIN_COUNT];
++ 
++static uint32_t inline get_pin_addr(GPIO_PIN pin)
++{
++  return (pin.gpio_bank + pin.gpio_bank_pin/8);
++}
++
++static uint8_t inline get_pin_mask(GPIO_PIN pin)
++{
++  return (1 << pin.gpio_bank_pin%8);
++}
++
++void arm_delay(float sec)
++{
++  rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
++}
++
++/**
++ * @brief Initializes the GPIO API. 
++ *        Allocates space to the gpio_pin array and sets every pin as NOT_USED.
++ *        If the API has already been initialized silently exits.
++ */
 +void gpio_initialize(void)
-+{	
++{ 
++   int i;
 +   if ( is_initialized )
 +    return;
-+
-+  is_initialized = 1;
-+  write32(AM335X_GPIO1_BASE +GPIO_OE,0x00000000);  //Enabling GPIO1 pins as OUTPUT PINs
++ 
++  is_initialized = true;
++      for ( i = 0; i < GPIO_PIN_COUNT; i++ ) {
++    gpio_pin[i].pin_type = NOT_USED;
++  }
 +}
 +
-+
-+ void gpio_set_value(unsigned gpio, int value)
-+{
-+
-+   	if (value)
-+		{
-+			uint8_t tmp = readb(AM335X_GPIO1_BASE + gpio/8+GPIO_SETDATAOUT);
-+			 tmp |= (1 << gpio%8);
-+			 writeb(tmp, AM335X_GPIO1_BASE + gpio/8+GPIO_SETDATAOUT);
-+		}
-+	else
-+		{
-+			uint8_t tmp = readb(AM335X_GPIO1_BASE + gpio/8+GPIO_CLEARDATAOUT);
-+			tmp |= (1 << gpio%8);
-+			writeb(tmp, AM335X_GPIO1_BASE + gpio/8+GPIO_CLEARDATAOUT);
-+
-+		}
-+
-+}
-+
-+void allgpioset(void)
-+{
-+printf("Setting all gpio1\n");
-+write32(AM335X_GPIO1_BASE +GPIO_SETDATAOUT,0xFFFFFFFF);
-+}
-+
-+void allgpioclr(void)
-+{
-+printf("Clearing all gpio1\n");
-+write32(AM335X_GPIO1_BASE+GPIO_CLEARDATAOUT,0xFFFFFFFF);
-+}
-diff --git a/c/src/lib/libbsp/arm/beagle/include/beagleboard.h b/c/src/lib/libbsp/arm/beagle/include/beagleboard.h
-new file mode 100644
-index 0000000..c5eff7e
---- /dev/null
-+++ b/c/src/lib/libbsp/arm/beagle/include/beagleboard.h
-@@ -0,0 +1,38 @@
 +/**
-+ * @file
++ * @brief Configures a GPIO pin to perform a certain function.
 + *
-+ * @ingroup arm_beagle
-+ *
-+ * @brief Global BSP definitions.
++ * @retval 0 Pin was configured successfully.
++ * @retval -1 The received pin is already being used, or unknown function.
 + */
++ int gpio_select_pin(GPIO_PIN pin, bbb_pin type)
++{
++ 
++  if (gpio_pin[pin.gpio_id].pin_type != NOT_USED)
++      return -1;
++  gpio_pin[pin.gpio_id].pin_type = type;
 +
-+/*
-+ * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++  switch(type){
++    
++    case DIGITAL_OUTPUT:
 +
-+ * The license and distribution terms for this file may be
-+ * found in the file LICENSE in this distribution or at
-+ * http://www.rtems.org/license/LICENSE.
++      writeb(0,get_pin_addr(pin) + AM335X_GPIO_OE);
++
++      break;
++
++    default:
++
++      return -1;
++  }
++  return 0;
++}
++
++/**
++ * @brief Gives an output GPIO pin the logical value of 1.
++ * @retval 0 Pin was set successfully.
++ * @retval -1 The received pin is not configured as an digital output.
 + */
++int gpio_set(GPIO_PIN pin)
++{
++  if (gpio_pin[pin.gpio_id-1].pin_type != DIGITAL_OUTPUT)
++    return -1;
++  
++  uint8_t gpiobyte = readb(get_pin_addr(pin) + AM335X_GPIO_SETDATAOUT);
++           gpiobyte |= get_pin_mask(pin);
++  writeb(gpiobyte, get_pin_addr(pin) + AM335X_GPIO_SETDATAOUT);
++  
++  return 0;
++}
 +
-+#ifndef LIBBSP_ARM_BEAGLE_H
-+#define LIBBSP_ARM_BEAGLE_H
-+
-+#include <stdint.h>
-+#include <bsp/utility.h>
-+
-+/* GPIO Memory Registers */
-+#define GPIO_REGISTER_SIZE (4)
-+
-+#define AM335X_GPIO0_BASE 		(0x44E07000)
-+#define AM335X_GPIO1_BASE		(0x4804C000)
-+#define AM335X_GPIO2_BASE		(0x481AC000)
-+#define AM335X_GPIO3_BASE		(0x481AE000)
-+
-+#define GPIO_CLEARDATAOUT (0x190)
-+#define GPIO_SETDATAOUT   (0x194)
-+#define GPIO_OE		  (0x134)
-+#define GPIO_DATAOUT      (0x13C)
-+#define GPIO_DATAIN       (0x138)
-+
-+
-+#endif
++/**
++ * @brief Gives an output GPIO pin the logical value of 0.
++ * @retval 0 Pin was cleared successfully.
++ * @retval -1 The received pin is not configured as an digital output.
++ */
++int gpio_clear(GPIO_PIN pin)
++{
++  if (gpio_pin[pin.gpio_id-1].pin_type != DIGITAL_OUTPUT)
++      return -1;
++  
++  uint8_t gpiobyte = readb(get_pin_addr(pin) + AM335X_GPIO_CLEARDATAOUT);
++           gpiobyte &= get_pin_mask(pin);
++  writeb(gpiobyte, get_pin_addr(pin) + AM335X_GPIO_CLEARDATAOUT);
++  
++  return 0;
++}
+\ No newline at end of file
 diff --git a/c/src/lib/libbsp/arm/beagle/include/gpio.h b/c/src/lib/libbsp/arm/beagle/include/gpio.h
 new file mode 100644
-index 0000000..e59d1cb
+index 0000000..dba58ae
 --- /dev/null
 +++ b/c/src/lib/libbsp/arm/beagle/include/gpio.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,89 @@
 +/**
 + * @file
 + *
@@ -168,37 +179,86 @@ index 0000000..e59d1cb
 +
 +#ifndef LIBBSP_ARM_BEAGLE_GPIO_H
 +#define LIBBSP_ARM_BEAGLE_GPIO_H
-+
++ 
 +#include <rtems.h>
-+#include "beagleboard.h"
-+
-+#include <rtems.h>
-+
++#include <libcpu/am335x.h>
++ 
 +#ifdef __cplusplus
 +extern "C" {
 +#endif /* __cplusplus */
++ 
++/**
++ * @brief The set of possible functions a pin can have.
++ *
++ * Enumerated type to define a pin function.
++ */
++typedef enum
++{
++  DIGITAL_OUTPUT,
++  NOT_USED
++} bbb_pin;
 +
++typedef enum
++{
++  PULL_UP,
++  PULL_DOWN,
++  NO_PULL_RESISTOR
++} bbb_gpio_input_mode;
++
++typedef struct
++{ 
++  /* The pin type */
++  bbb_pin pin_type;
++
++  /* GPIO input pin mode. */
++  bbb_gpio_input_mode input_mode;
++
++} bbb_gpio_pin;
++
++typedef struct {
++  char *gpio_name;	/* Readable GPIO pin name */
++  unsigned int gpio_bank_pin;  /* GPIO bank pin number as per Manual of AM335X */
++  unsigned int gpio_bank; /* GPIO bank determines register */
++  unsigned int gpio_id;  /* unique pin number for every gpio*/	
++ } GPIO_PIN;
++
++
++ #define USR0  	((GPIO_PIN){  "GPIO1_21", 21, AM335X_GPIO1, 1 })
++ #define USR1  	((GPIO_PIN){  "GPIO1_22", 22, AM335X_GPIO1, 2 })
++ #define USR2  	((GPIO_PIN){  "GPIO1_23", 23, AM335X_GPIO1, 3 })
++ #define USR3  	((GPIO_PIN){  "GPIO1_24", 24, AM335X_GPIO1, 4 })
++
++/**
++ * @brief Insert delay in seconds.
++ */
++extern void arm_delay(float sec);
++/**`
++ * @brief Initializes the GPIO API.
++ */
 +extern void gpio_initialize(void);
-+
-+extern void allgpioset(void);
-+
-+extern void allgpioclr(void);
-+
-+extern void gpio_set_value(unsigned gpio, int value);
++/**
++ * @brief Selects a GPIO pin for a specific function.
++ */
++extern int gpio_select_pin(GPIO_PIN pin, bbb_pin type);
++/**
++ * @brief Turns on the given pin.
++ */
++extern int gpio_set(GPIO_PIN pin);
++/**
++ * @brief Turns off the given pin.
++ */
++extern int gpio_clear(GPIO_PIN pin);
 +
 +#endif /* LIBBSP_ARM_BEAGLE_GPIO_H */
+\ No newline at end of file
 diff --git a/c/src/lib/libbsp/arm/beagle/preinstall.am b/c/src/lib/libbsp/arm/beagle/preinstall.am
-index dd1ec95..6961630 100644
+index dd1ec95..e963bc1 100644
 --- a/c/src/lib/libbsp/arm/beagle/preinstall.am
 +++ b/c/src/lib/libbsp/arm/beagle/preinstall.am
-@@ -110,6 +110,14 @@ $(PROJECT_INCLUDE)/bsp/i2c.h: include/i2c.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
+@@ -110,6 +110,10 @@ $(PROJECT_INCLUDE)/bsp/i2c.h: include/i2c.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
  	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/i2c.h
  PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/i2c.h
  
-+$(PROJECT_INCLUDE)/bsp/beagleboard.h: include/beagleboard.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
-+	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/beagleboard.h
-+PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/beagleboard.h
-+
 +$(PROJECT_INCLUDE)/bsp/gpio.h: include/gpio.h $(PROJECT_INCLUDE)/bsp/$(dirstamp)
 +	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/bsp/gpio.h
 +PREINSTALL_FILES += $(PROJECT_INCLUDE)/bsp/gpio.h
@@ -206,60 +266,37 @@ index dd1ec95..6961630 100644
  $(PROJECT_INCLUDE)/libcpu/arm-cp15.h: ../../../libcpu/arm/shared/include/arm-cp15.h $(PROJECT_INCLUDE)/libcpu/$(dirstamp)
  	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
  PREINSTALL_FILES += $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
-diff --git a/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img
-new file mode 100644
-index 0000000..d45fd3a
-Binary files /dev/null and b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img differ
-diff --git a/c/src/lib/libbsp/arm/beagle/startup/bspstart.c b/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
-index b156564..9d92b95 100644
---- a/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
-+++ b/c/src/lib/libbsp/arm/beagle/startup/bspstart.c
-@@ -16,6 +16,7 @@
- #include <bsp/bootcard.h>
- #include <bsp/irq-generic.h>
- 
-+
- void bsp_start(void)
- {
- #if IS_DM3730
-diff --git a/c/src/lib/libbsp/bfin/acinclude.m4 b/c/src/lib/libbsp/bfin/acinclude.m4
-index ab6082e..828fd89 100644
---- a/c/src/lib/libbsp/bfin/acinclude.m4
-+++ b/c/src/lib/libbsp/bfin/acinclude.m4
-@@ -2,12 +2,12 @@
- AC_DEFUN([RTEMS_CHECK_BSPDIR],
- [
-   case "$1" in
--  TLL6527M )
--    AC_CONFIG_SUBDIRS([TLL6527M]);;
-   bf537Stamp )
-     AC_CONFIG_SUBDIRS([bf537Stamp]);;
-   eZKit533 )
-     AC_CONFIG_SUBDIRS([eZKit533]);;
-+  TLL6527M )
-+    AC_CONFIG_SUBDIRS([TLL6527M]);;
-   *)
-     AC_MSG_ERROR([Invalid BSP]);;
-   esac
-diff --git a/c/src/lib/libbsp/powerpc/acinclude.m4 b/c/src/lib/libbsp/powerpc/acinclude.m4
-index 6442399..e46fa2b 100644
---- a/c/src/lib/libbsp/powerpc/acinclude.m4
-+++ b/c/src/lib/libbsp/powerpc/acinclude.m4
-@@ -38,12 +38,12 @@ AC_DEFUN([RTEMS_CHECK_BSPDIR],
-     AC_CONFIG_SUBDIRS([t32mppc]);;
-   tqm8xx )
-     AC_CONFIG_SUBDIRS([tqm8xx]);;
--  virtex )
--    AC_CONFIG_SUBDIRS([virtex]);;
-   virtex4 )
-     AC_CONFIG_SUBDIRS([virtex4]);;
-   virtex5 )
-     AC_CONFIG_SUBDIRS([virtex5]);;
-+  virtex )
-+    AC_CONFIG_SUBDIRS([virtex]);;
-   *)
-     AC_MSG_ERROR([Invalid BSP]);;
-   esac
+diff --git a/c/src/lib/libcpu/arm/shared/include/am335x.h b/c/src/lib/libcpu/arm/shared/include/am335x.h
+index 1f638bd..d4cea8e 100644
+--- a/c/src/lib/libcpu/arm/shared/include/am335x.h
++++ b/c/src/lib/libcpu/arm/shared/include/am335x.h
+@@ -279,4 +279,24 @@
+ #define AM335X_WDT_WWPS                0x34
+     /* Command posted status */
+ #define AM335X_WDT_WSPR                0x48
+-    /* Activate/deactivate sequence */
++    /* Activate/deactivate sequence */ 
++    /* For BeagleBone Black GPIO*/
++#define AM335X_GPIO0                  0x44E07000
++    /* GPIO Bank 0 base Register */
++#define AM335X_GPIO1                  0x4804C000
++    /* GPIO Bank 1 base Register */
++#define AM335X_GPIO2                  0x481AC000
++    /* GPIO Bank 2 base Register */
++#define AM335X_GPIO3                  0x481AE000
++    /* GPIO Bank 3 base Register */
++#define AM335X_GPIO_OE                0x134
++     /* GPIO Output Enable Register */
++#define AM335X_GPIO_DATAOUT           0x13C
++      /* GPIO Output pin set Register */
++#define AM335X_GPIO_DATAIN            0x138
++      /* GPIO Read Data Register */
++#define AM335X_GPIO_CLEARDATAOUT      0x190
++      /* GPIO Output Clear Register */
++#define AM335X_GPIO_SETDATAOUT        0x194
++       /* GPIO Output Set Register */
++ /*Gpio memory registers am335x*/
+\ No newline at end of file
 diff --git a/testsuites/samples/Makefile.am b/testsuites/samples/Makefile.am
 index 08455d3..de4f351 100644
 --- a/testsuites/samples/Makefile.am
@@ -286,7 +323,7 @@ index e6f12d0..ac32583 100644
  fileio/Makefile
 diff --git a/testsuites/samples/gpio/Makefile.am b/testsuites/samples/gpio/Makefile.am
 new file mode 100644
-index 0000000..d6009c8
+index 0000000..5f06584
 --- /dev/null
 +++ b/testsuites/samples/gpio/Makefile.am
 @@ -0,0 +1,20 @@
@@ -305,7 +342,7 @@ index 0000000..d6009c8
 +LINK_OBJS = $(gpio_OBJECTS)
 +LINK_LIBS = $(gpio_LDLIBS)
 +
-+gpio$(EXEEXT): $(gpio_OBJECTS) $(gpio_DEPENDENCIES)
++hello$(EXEEXT): $(gpio_OBJECTS) $(gpio_DEPENDENCIES)
 +	@rm -f gpio$(EXEEXT)
 +	$(make-exe)
 +
@@ -327,19 +364,19 @@ index 0000000..9812864
 +
 diff --git a/testsuites/samples/gpio/gpio.scn b/testsuites/samples/gpio/gpio.scn
 new file mode 100644
-index 0000000..7dd6804
+index 0000000..057ab6e
 --- /dev/null
 +++ b/testsuites/samples/gpio/gpio.scn
 @@ -0,0 +1,3 @@
 +*** GPIO TEST ***
-+Gpio Test
++Gpio Testing
 +*** END OF GPIO TEST ***
 diff --git a/testsuites/samples/gpio/init.c b/testsuites/samples/gpio/init.c
 new file mode 100644
-index 0000000..8514ed3
+index 0000000..e4496fa
 --- /dev/null
 +++ b/testsuites/samples/gpio/init.c
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,80 @@
 +/*
 + *  COPYRIGHT (c) 1989-2012.
 + *  On-Line Applications Research Corporation (OAR).
@@ -348,76 +385,76 @@ index 0000000..8514ed3
 + *  found in the file LICENSE in this distribution or at
 + *  http://www.rtems.org/license/LICENSE.
 + */
++
 +#ifdef HAVE_CONFIG_H
 +#include "config.h"
 +#endif
-+#include <rtems.h>
-+#include <rtems/test.h>
 +
++#include <rtems/test.h>
 +#include <bsp/gpio.h> /* Calls the BSP gpio library */
 +#include <rtems/status-checks.h>
-+
 +#include <stdio.h>
 +#include <stdlib.h>
 +
-+void inline delaysec(float sec)
-+{
-+rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
-+}
-+
-+/*Function for USR LEDs demo.*/
-+
-+void inline gpio_auto()
-+{
-+/*Generating some patterns*/
-+allgpioset();
-+delaysec(1);
-+allgpioclr();
-+gpio_set_value(22,1);gpio_set_value(24,1);
-+delaysec(0.4);
-+gpio_set_value(22,1);gpio_set_value(24,0);
-+delaysec(0.3);
-+gpio_set_value(21,1);gpio_set_value(23,1);
-+delaysec(0.5);
-+gpio_set_value(22,0);gpio_set_value(24,0);
-+delaysec(0.2);
-+gpio_set_value(22,1);
-+delaysec(0.2);
-+allgpioclr();
-+delaysec(0.1);
-+}
-+
++/* forward declarations to avoid warnings */
 +rtems_task Init(rtems_task_argument argument);
 +
-+const char rtems_test_name[] = "GPIO TEST";
++const char rtems_test_name[] = "Gpio Test";
 +
 +rtems_task Init(
 +  rtems_task_argument ignored
 +)
 +{
 +  rtems_test_begin();
-+  printf("GPIO Testing started\n");
++  printf("Starting Gpio Testing\n");
++    /* Initializes the GPIO API */
 +  gpio_initialize();
-+  allgpioclr();
-+  gpio_auto();
-+  printf( "GPIO TEST by Ketul\n" );
++
++  gpio_select_pin(USR0, DIGITAL_OUTPUT);
++  gpio_select_pin(USR1, DIGITAL_OUTPUT);
++  gpio_select_pin(USR2, DIGITAL_OUTPUT);
++  gpio_select_pin(USR3, DIGITAL_OUTPUT);
++  printf("Clearing all USR LEDs \n");
++  gpio_clear(USR0);
++  gpio_clear(USR1);
++  gpio_clear(USR2);
++  gpio_clear(USR3); 
++
++  /*Generation of USR LED pattern*/
++  gpio_set(USR0);
++  arm_delay(0.5);
++  gpio_set(USR1);
++  arm_delay(0.5);
++  gpio_set(USR2);
++  arm_delay(0.5);
++  gpio_set(USR3);
++  arm_delay(0.5);
++  gpio_clear(USR3);
++  arm_delay(1);
++  gpio_clear(USR2);
++  arm_delay(1);
++  gpio_clear(USR1);
++  arm_delay(1);
++  gpio_clear(USR0);
++  arm_delay(1);
++
++  printf("Gpio Test Completed\n");
 +  rtems_test_end();
 +  exit( 0 );
 +}
 +
-+
-+/* NOTICE: the clock driver is explicitly disabled */
++/* NOTICE: the clock driver is enabled */
 +#define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
-+
++ 
 +#define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
-+
++ 
 +#define CONFIGURE_MAXIMUM_TASKS            1
 +#define CONFIGURE_USE_DEVFS_AS_BASE_FILESYSTEM
-+
++ 
 +#define CONFIGURE_RTEMS_INIT_TASKS_TABLE
-+
++ 
 +#define CONFIGURE_INITIAL_EXTENSIONS RTEMS_TEST_INITIAL_EXTENSION
-+
++ 
 +#define CONFIGURE_INIT
 +#include <rtems/confdefs.h>
-+
+\ No newline at end of file
