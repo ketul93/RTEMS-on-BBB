@@ -205,3 +205,121 @@ index 2b9ebf7..58f1f61 100644
 +extern int rtems_adc_read(unsigned int);
  #endif /* _RTEMS_GPIO_H */
 \ No newline at end of file
+diff --git a/testsuites/samples/adc/Makefile.am b/testsuites/samples/adc/Makefile.am
+new file mode 100644
+index 0000000..dabe52d
+--- /dev/null
++++ b/testsuites/samples/adc/Makefile.am
+@@ -0,0 +1,20 @@
++
++rtems_tests_PROGRAMS = adc
++adc_SOURCES = init.c
++
++dist_rtems_tests_DATA = adc.scn
++dist_rtems_tests_DATA += adc.doc
++
++include $(RTEMS_ROOT)/make/custom/@RTEMS_BSP@.cfg
++include $(top_srcdir)/../automake/compile.am
++include $(top_srcdir)/../automake/leaf.am
++
++
++LINK_OBJS = $(adc_OBJECTS)
++LINK_LIBS = $(adc_LDLIBS)
++
++hello$(EXEEXT): $(adc_OBJECTS) $(adc_DEPENDENCIES)
++	@rm -f adc$(EXEEXT)
++	$(make-exe)
++
++include $(top_srcdir)/../automake/local.am
+diff --git a/testsuites/samples/adc/adc.doc b/testsuites/samples/adc/adc.doc
+new file mode 100644
+index 0000000..9812864
+--- /dev/null
++++ b/testsuites/samples/adc/adc.doc
+@@ -0,0 +1,9 @@
++#  COPYRIGHT (c) 1989-1999.
++#  On-Line Applications Research Corporation (OAR).
++#
++#  The license and distribution terms for this file may be
++#  found in the file LICENSE in this distribution or at
++#  http://www.rtems.org/license/LICENSE.
++#
++
++
+diff --git a/testsuites/samples/adc/adc.scn b/testsuites/samples/adc/adc.scn
+new file mode 100644
+index 0000000..00a71bb
+--- /dev/null
++++ b/testsuites/samples/adc/adc.scn
+@@ -0,0 +1,3 @@
++*** ADC TEST ***
++ADC Testing
++*** END OF ADC TEST ***
+diff --git a/testsuites/samples/adc/init.c b/testsuites/samples/adc/init.c
+new file mode 100644
+index 0000000..1a6c03b
+--- /dev/null
++++ b/testsuites/samples/adc/init.c
+@@ -0,0 +1,61 @@
++/*
++ *  Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++ *
++ *  The license and distribution terms for this file may be
++ *  found in the file LICENSE in this distribution or at
++ *  http://www.rtems.org/license/LICENSE.
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <rtems/test.h>
++#include <bsp/beagleboneblack.h> /* Calls the BBB specific library */
++#include <rtems/gpio.h> /* Calls the BSP gpio library */
++#include <stdio.h>
++#include <stdlib.h>
++
++static void inline delay_sec(int sec)
++{
++ rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
++}
++/* forward declarations to avoid warnings */
++rtems_task Init(rtems_task_argument argument);
++
++const char rtems_test_name[] = "ADC Test";
++
++rtems_task Init(
++  rtems_task_argument ignored
++)
++{
++ rtems_test_begin();
++ printf("Starting ADC Testing\n");
++ int adcvalue=0;
++ int i;
++ for (i = 0; i < 10; ++i)
++  {
++    adcvalue = rtems_adc_read(BBB_P9_39); 
++    printf("%d\n",adcvalue);
++    delay_sec(1);
++  }
++ 
++ 
++ printf("ADC Test Completed\n");
++ rtems_test_end();
++ exit( 0 );
++}
++
++/* NOTICE: the clock driver is enabled */
++#define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
++#define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
++ 
++#define CONFIGURE_MAXIMUM_TASKS            1
++#define CONFIGURE_USE_DEVFS_AS_BASE_FILESYSTEM
++
++#define CONFIGURE_RTEMS_INIT_TASKS_TABLE 
++
++#define CONFIGURE_INITIAL_EXTENSIONS RTEMS_TEST_INITIAL_EXTENSION
++ 
++#define CONFIGURE_INIT
++#include <rtems/confdefs.h>
+\ No newline at end of file
