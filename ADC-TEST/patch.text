@@ -1,0 +1,207 @@
+diff --git a/c/src/lib/libbsp/arm/beagle/Makefile.am b/c/src/lib/libbsp/arm/beagle/Makefile.am
+index 6b876dd..debcc88 100644
+--- a/c/src/lib/libbsp/arm/beagle/Makefile.am
++++ b/c/src/lib/libbsp/arm/beagle/Makefile.am
+@@ -115,6 +115,9 @@ libbsp_a_SOURCES += ../../shared/console.c \
+ # GPIO
+ libbsp_a_SOURCES += gpio/gpio.c
+ 
++#ADC
++libbsp_a_SOURCES += adc/adc.c
++
+ # I2C
+ libbsp_a_SOURCES += misc/i2c.c
+ 
+diff --git a/c/src/lib/libbsp/arm/beagle/adc/adc.c b/c/src/lib/libbsp/arm/beagle/adc/adc.c
+new file mode 100644
+index 0000000..63c3307
+--- /dev/null
++++ b/c/src/lib/libbsp/arm/beagle/adc/adc.c
+@@ -0,0 +1,97 @@
++/**
++ * @file
++ *
++ * @ingroup arm_beagle
++ *
++ * @brief ADC definitions.
++ */
++ 
++/**
++ * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
++
++ * The license and distribution terms for this file may be
++ * found in the file LICENSE in this distribution or at
++ * http://www.rtems.org/license/LICENSE.
++ */
++ 
++#include <libcpu/am335x.h>
++#include <rtems.h>
++#include <rtems/gpio.h>
++#include <bsp/irq.h>
++#include <bsp/beagleboneblack.h>
++#include <bsp.h>
++#include <stdlib.h>
++#include <stdint.h>
++
++static void inline reg_update_or(uint32_t reg, uint32_t val)
++{
++ uint32_t reg_val=mmio_read(reg);
++ reg_val |= val;
++ mmio_write(reg, reg_val);
++}
++
++/* Configure STEPCONFIG register with average of 16 */
++static void inline stepc_update_16(uint32_t reg, uint32_t val)
++{
++ mmio_write(reg,(val | AM335X_ADC_AVG16));
++}
++
++/* Configure STEPDELAY register */
++static void inline stepd_update(uint32_t reg)
++{
++ mmio_write(reg,(0x0F)<<24);
++}
++
++static uint32_t inline get_val(uint32_t reg, uint32_t val)
++{
++ return (mmio_read(reg) & val);
++}
++
++void rtems_adc_init(void)
++{
++ /* Enable the CM_WKUP_ADC_CLKCTRL with CM_WKUP_MODUELEMODE_ENABLE */
++ reg_update_or(AM335X_CM_WKUP_ADC_CLKCTRL, AM335X_CM_WKUP_MODULEMODE_ENABLE);
++ 
++ while(!(get_val(AM335X_CM_WKUP_ADC_CLKCTRL,AM335X_CM_WKUP_MODULEMODE_ENABLE)))
++ {
++		/* Here waiting period for intialization of adc clock module */
++ }
++
++ /* Make sure STEPCONFIG write protect is off */
++ reg_update_or(AM335X_ADC_CTRL, AM335X_ADC_STEPCONFIG_WRITE_PROTECT_OFF);
++ 
++ /* ADC_STEPCONFIG for each AIN pin */
++ stepc_update_16(AM335X_ADC_STEPCONFIG1,0x00<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG2,0x01<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG3,0x02<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG4,0x03<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG5,0x04<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG6,0x05<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG7,0x06<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++ stepc_update_16(AM335X_ADC_STEPCONFIG8,0x07<<19);
++ stepd_update(AM335X_ADC_STEPDELAY1);
++
++ /* ADC_CTRL is enabled */
++ reg_update_or(AM335X_ADC_CTRL,0x01);
++}
++
++int rtems_adc_read(unsigned int pin_number) 
++{
++	
++ /* The clock module is not enabled */
++ if(get_val(AM335X_CM_WKUP_ADC_CLKCTRL,AM335X_CM_WKUP_IDLEST_DISABLED))
++	rtems_adc_init();
++	
++ /* Enable the step sequencer for the given pin */
++ reg_update_or(AM335X_ADC_STEPENABLE,(0x01<<(pin_number+1)));
++
++ /* Return the value of data register FIFO0 */
++ return (get_val(AM335X_ADC_FIFO0DATA,AM335X_ADC_FIFO_MASK));
++}
+\ No newline at end of file
+diff --git a/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h b/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h
+index 5630645..4e6b589 100644
+--- a/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h
++++ b/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h
+@@ -56,6 +56,16 @@
+ #define BBB_P9_41     20 /* GPIO0_20 */
+ #define BBB_P9_42      7 /* GPIO0_7 */
+ 
++/* ADC pins on the BeagleBone Black */
++#define BBB_P9_33      4 /* AIN_4 */
++#define BBB_P9_34      7 /* AIN_7 */
++#define BBB_P9_35      6 /* AIN_6 */
++#define BBB_P9_36      5 /* AIN_5 */
++#define BBB_P9_37      2 /* AIN_2 */
++#define BBB_P9_38      3 /* AIN_3 */
++#define BBB_P9_39      0 /* AIN_0 */
++#define BBB_P9_40      1 /* AIN_1 */
++
+ /* BSP related specifications */
+ #define GPIO_PIN_COUNT 128
+ #define GPIO_PINS_PER_BANK 32 
+diff --git a/c/src/lib/libcpu/arm/shared/include/am335x.h b/c/src/lib/libcpu/arm/shared/include/am335x.h
+index ebaa703..faba28b 100644
+--- a/c/src/lib/libcpu/arm/shared/include/am335x.h
++++ b/c/src/lib/libcpu/arm/shared/include/am335x.h
+@@ -319,4 +319,42 @@
+ #define AM335X_GPIO_CLEARDATAOUT      0x190
+     /* GPIO Output Clear Register */
+ #define AM335X_GPIO_SETDATAOUT        0x194
+-    /* GPIO Output Set Register */
+\ No newline at end of file
++    /* GPIO Output Set Register */
++
++
++/* ADC registers */
++#define AM335X_ADC (0x44E0D000)
++#define AM335X_CM_WKUP (0x44E00400)
++#define AM335X_CM_WKUP_ADC_CLKCTRL (AM335X_CM_WKUP+0xBC)
++#define AM335X_CM_WKUP_MODULEMODE_ENABLE (0x02)
++#define AM335X_CM_WKUP_IDLEST_DISABLED (0x03<<16)
++
++#define AM335X_ADC_CTRL (AM335X_ADC+0x40)
++#define AM335X_ADC_STEPENABLE (AM335X_ADC+0x54)
++#define AM335X_ADC_STEPCONFIG_WRITE_PROTECT_OFF (0x01<<2)
++
++#define AM335X_ADC_STEPCONFIG1 (AM335X_ADC+0x64)
++#define AM335X_ADC_STEPDELAY1  (AM335X_ADC+0x68)
++#define AM335X_ADC_STEPCONFIG2 (AM335X_ADC+0x6C)
++#define AM335X_ADC_STEPDELAY2  (AM335X_ADC+0x70)
++#define AM335X_ADC_STEPCONFIG3 (AM335X_ADC+0x74)
++#define AM335X_ADC_STEPDELAY3  (AM335X_ADC+0x78)
++#define AM335X_ADC_STEPCONFIG4 (AM335X_ADC+0x7C)
++#define AM335X_ADC_STEPDELAY4  (AM335X_ADC+0x80)
++#define AM335X_ADC_STEPCONFIG5 (AM335X_ADC+0x84)
++#define AM335X_ADC_STEPDELAY5  (AM335X_ADC+0x88)
++#define AM335X_ADC_STEPCONFIG6 (AM335X_ADC+0x8C)
++#define AM335X_ADC_STEPDELAY6  (AM335X_ADC+0x90)
++#define AM335X_ADC_STEPCONFIG7 (AM335X_ADC+0x94)
++#define AM335X_ADC_STEPDELAY7  (AM335X_ADC+0x98)
++#define AM335X_ADC_STEPCONFIG8 (AM335X_ADC+0x9C)
++#define AM335X_ADC_STEPDELAY8  (AM335X_ADC+0xA0)
++
++#define AM335X_ADC_AVG0  (0x000)
++#define AM335X_ADC_AVG2  (0x001)
++#define AM335X_ADC_AVG4  (0x010)
++#define AM335X_ADC_AVG8  (0x011)
++#define AM335X_ADC_AVG16 (0x100) 
++
++#define AM335X_ADC_FIFO0DATA (AM335X_ADC+0x100)
++#define AM335X_ADC_FIFO_MASK (0xFFF)
+diff --git a/cpukit/include/rtems/gpio.h b/cpukit/include/rtems/gpio.h
+index 2b9ebf7..58f1f61 100644
+--- a/cpukit/include/rtems/gpio.h
++++ b/cpukit/include/rtems/gpio.h
+@@ -61,5 +61,12 @@ extern int rtems_gpio_digital_clear(gpio_pin_handle *);
+  * @brief currently configured pin is released and made UNCONFIGURED.
+  */
+ extern int rtems_gpio_release_pin(gpio_pin_handle *);
+-
++/**
++ * @brief ADC intialization.
++ */
++extern void rtems_adc_init();
++/**
++ * @brief Reads the ADC value for input from pin.
++ */
++extern int rtems_adc_read(unsigned int);
+ #endif /* _RTEMS_GPIO_H */
+\ No newline at end of file
