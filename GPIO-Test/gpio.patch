@@ -1,5 +1,5 @@
 diff --git a/c/src/lib/libbsp/arm/beagle/Makefile.am b/c/src/lib/libbsp/arm/beagle/Makefile.am
-index abef8ba..6b876dd 100644
+index aa96294..26cd28a 100644
 --- a/c/src/lib/libbsp/arm/beagle/Makefile.am
 +++ b/c/src/lib/libbsp/arm/beagle/Makefile.am
 @@ -39,6 +39,7 @@ include_bsp_HEADERS += ../shared/include/arm-release-id.h
@@ -10,22 +10,22 @@ index abef8ba..6b876dd 100644
  
  include_libcpu_HEADERS =
  include_libcpu_HEADERS += ../../../libcpu/arm/shared/include/arm-cp15.h
-@@ -111,6 +112,9 @@ libbsp_a_SOURCES += ../../shared/console.c \
-         ../../shared/console_write.c \
-         ../../shared/console_control.c
+@@ -114,6 +115,9 @@ libbsp_a_SOURCES += ../../shared/console.c \
+ # I2C
+ libbsp_a_SOURCES += misc/i2c.c
  
 +# GPIO
 +libbsp_a_SOURCES += gpio/gpio.c
 +
- # I2C
- libbsp_a_SOURCES += misc/i2c.c
- 
+ #RTC
+ libbsp_a_SOURCES += rtc.c
+ libbsp_a_SOURCES += ../../shared/tod.c
 diff --git a/c/src/lib/libbsp/arm/beagle/gpio/gpio.c b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
 new file mode 100644
-index 0000000..9800f73
+index 0000000..5b6cbbe
 --- /dev/null
 +++ b/c/src/lib/libbsp/arm/beagle/gpio/gpio.c
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,208 @@
 +/**
 + * @file
 + *
@@ -36,7 +36,7 @@ index 0000000..9800f73
 + 
 +/**
 + * Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
-+
++ *
 + * The license and distribution terms for this file may be
 + * found in the file LICENSE in this distribution or at
 + * http://www.rtems.org/license/LICENSE.
@@ -50,15 +50,41 @@ index 0000000..9800f73
 +#include <bsp.h>
 +#include <stdlib.h>
 +#include <stdint.h>
-+#define GPIO_PIN_COUNT 128
++#include <assert.h>
++
++/**
++ * @brief GPIO API mutex atributes.
++ */
++#define MUTEX_ATRIBUTES                         \
++  ( RTEMS_LOCAL                                 \
++    | RTEMS_PRIORITY                            \
++    | RTEMS_BINARY_SEMAPHORE                    \
++    | RTEMS_INHERIT_PRIORITY                    \
++    | RTEMS_NO_PRIORITY_CEILING                 \
++    )
++
++#define OBTAIN_LOCK(s)  if(rtems_semaphore_obtain(s,                     \
++                                                  RTEMS_WAIT,            \
++                                                  RTEMS_NO_TIMEOUT       \ 
++                                                  ) != RTEMS_SUCCESSFUL) \
++                          printf("Semaphore not obtained\n");
++
++#define RELEASE_LOCK(s) if(rtems_semaphore_release(s) != RTEMS_SUCCESSFUL) \
++                          printf("Semaphore not released\n");
 +
 +/* GPIO bank pin number as per TRM of AM335X */
-+unsigned int gpio_bank_pin[GPIO_PIN_COUNT]; 
++static unsigned int gpio_bank_pin[GPIO_PIN_COUNT]; 
 +/* GPIO bank determines register of AM335X */
-+unsigned int gpio_bank[GPIO_PIN_COUNT]; 
++static unsigned int gpio_bank[GPIO_PIN_COUNT];
++/* Pin states for all GPIO pins*/
++static unsigned int gpio_pin_state[GPIO_PIN_COUNT];
++/* Variable for gpio initialization */
++static bool is_initialized = false;
++/* Semaphore for avoiding race condition */
++static rtems_id bank_lock;
 +
 +static const uint32_t gpio_bank_addrs[] = 
-+ { AM335X_GPIO0, AM335X_GPIO1, AM335X_GPIO2, AM335X_GPIO3 };
++  { AM335X_GPIO0, AM335X_GPIO1, AM335X_GPIO2, AM335X_GPIO3 };
 +
 +static uint32_t inline get_pin_mask(unsigned int pin_number)
 +{
@@ -67,94 +93,160 @@ index 0000000..9800f73
 +
 +static void inline reg_update_set(unsigned int pin_number,uint32_t reg)
 +{
-+ uint32_t gpioreg=gpio_bank[pin_number]+reg;
-+ uint32_t gpioreg_val=mmio_read(gpioreg);
-+ gpioreg_val |= get_pin_mask(pin_number);
-+ mmio_write(gpioreg, gpioreg_val);
++  uint32_t gpioreg=gpio_bank[pin_number]+reg;
++  uint32_t gpioreg_val=mmio_read(gpioreg);
++  gpioreg_val |= get_pin_mask(pin_number);
++  mmio_write(gpioreg, gpioreg_val);
 +}
 +
 +static void inline reg_update_unset(unsigned int pin_number,uint32_t reg)
 +{
-+ uint32_t gpioreg=gpio_bank[pin_number]+reg;
-+ uint32_t gpioreg_val=mmio_read(gpioreg);
-+ gpioreg_val &= ~get_pin_mask(pin_number);
-+ mmio_write(gpioreg, gpioreg_val);
++  uint32_t gpioreg=gpio_bank[pin_number]+reg;
++  uint32_t gpioreg_val=mmio_read(gpioreg);
++  gpioreg_val &= ~get_pin_mask(pin_number);
++  mmio_write(gpioreg, gpioreg_val);
 +}
 +
 +/**
-+ * @brief Configures a GPIO pin to perform a output.
-+ *
-+ * @retval 0 Pin was configured successfully as output.
-+ * @retval 1 The pin is invalid or unknown.
++ * @brief Initializes the GPIO API. 
++ *        Allocates space to gpio_pin_state and sets pin state as UNCONFIGURED.
++ *        Creates Semaphore for avoiding any race condition.
++ *        If the API has already been initialized silently exits.
 + */
-+int rtems_gpio_configure_pin_digital_out(gpio_pin_handle *gpio_pin_assign,unsigned int pin_number)
-+{
-+ if (pin_number > 128 || pin_number < 0)
-+   return 1;
-+ gpio_pin_assign->pin_number = pin_number;
-+ gpio_bank_pin[pin_number] = pin_number % 32;
-+ gpio_bank[pin_number] = gpio_bank_addrs[pin_number/32];
-+ reg_update_unset(gpio_pin_assign->pin_number,AM335X_GPIO_OE);
-+ gpio_pin_assign->pinen = TRUE;
-+ gpio_pin_assign->output = TRUE;
-+ return 0;
++void rtems_gpio_initialize(void)
++{ 
++  int i;
++  rtems_status_code status;
++  if ( is_initialized )
++    return;
++ 
++  is_initialized = true;
++  for ( i = 0; i < GPIO_PIN_COUNT; ++i ) {
++    gpio_pin_state[i] = GPIO_PIN_STATE_UNCONFIGURED;
++  }
++  /* Create GPIO bank Semaphores */
++  status = rtems_semaphore_create(
++    rtems_build_name('G', 'L', 'C', 'K'), 
++    1, 
++    MUTEX_ATRIBUTES, 
++    0, 
++    &bank_lock
++  );
++  if (status != RTEMS_SUCCESSFUL){
++    printf("Semaphore not created\n");
++  }
++}
++
++/**
++ * @brief Configures a GPIO pin to perform a digital output.
++ *
++ * @retval GPIO_SUCCESSFUL Pin was configured successfully as output.
++ * @retval GPIO_UNKNOWN_PIN Pin is invalid or unknown.
++ * @retval GPIO_MISCONFIGURED_PIN Pin is already configured for another state.
++ */
++int rtems_gpio_configure_pin_digital_out(
++  gpio_pin_handle *gpio_pin_assign,unsigned int pin_number){
++  
++  OBTAIN_LOCK(bank_lock);
++  if (pin_number >= GPIO_PIN_COUNT || pin_number < 0){
++    RELEASE_LOCK(bank_lock);
++    return GPIO_UNKNOWN_PIN;
++  }
++  if (
++  gpio_pin_state[gpio_pin_assign->pin_number] != GPIO_PIN_STATE_UNCONFIGURED &&
++  gpio_pin_state[gpio_pin_assign->pin_number] != GPIO_PIN_STATE_DIGITAL_OUT){
++    RELEASE_LOCK(bank_lock);
++    return GPIO_MISCONFIGURED_PIN;
++  }
++ 
++  gpio_pin_state[gpio_pin_assign->pin_number] = GPIO_PIN_STATE_DIGITAL_OUT;
++  gpio_pin_assign->pin_number = pin_number;
++  gpio_bank_pin[pin_number] = pin_number % GPIO_PINS_PER_BANK;
++  gpio_bank[pin_number] = gpio_bank_addrs[pin_number/GPIO_PINS_PER_BANK];
++
++  reg_update_unset(gpio_pin_assign->pin_number,AM335X_GPIO_OE);
++
++  RELEASE_LOCK(bank_lock);
++  return GPIO_SUCCESSFUL;
 +}
 +
 +/**
 + * @brief Gives an output GPIO pin the logical value of 1.
-+ * @retval 0 Pin was set successfully.
-+ * @retval 2 The received pin is not configured as an digital output.
++ * @retval GPIO_SUCCESSFUL Pin was set successfully.
++ * @retval GPIO_MISCONFIGURED_PIN The received pin is not configured 
++ *         for digital output.
 + */
-+int rtems_gpio_digital_set(gpio_pin_handle *gpio_pin_assign)
-+{
-+ if (!gpio_pin_assign->pinen || !gpio_pin_assign->output)
-+   return 2;
++int rtems_gpio_digital_set(gpio_pin_handle *gpio_pin_assign){
++
++  OBTAIN_LOCK(bank_lock);
++  if (
++  gpio_pin_state[gpio_pin_assign->pin_number] != GPIO_PIN_STATE_DIGITAL_OUT){
++    RELEASE_LOCK(bank_lock);
++    return GPIO_MISCONFIGURED_PIN;
++  }
++
++  reg_update_set(gpio_pin_assign->pin_number,AM335X_GPIO_DATAOUT);
 + 
-+ reg_update_set(gpio_pin_assign->pin_number,AM335X_GPIO_DATAOUT);
-+ return 0;
++  RELEASE_LOCK(bank_lock);
++  return GPIO_SUCCESSFUL;
 +}
 +
 +/**
 + * @brief Gives an output GPIO pin the logical value of 0.
-+ * @retval 0 Pin was cleared successfully.
-+ * @retval 2 The received pin is not configured as an digital output.
++ * @retval GPIO_SUCCESSFUL Pin was cleared successfully.
++ * @retval GPIO_MISCONFIGURED_PIN The received pin is not configured 
++ *         for digital output.
 + */
-+int rtems_gpio_digital_clear(gpio_pin_handle *gpio_pin_assign)
-+{
-+ if (!gpio_pin_assign->pinen || !gpio_pin_assign->output)
-+   return 2;
++int rtems_gpio_digital_clear(gpio_pin_handle *gpio_pin_assign){
++
++  OBTAIN_LOCK(bank_lock);
++  if (
++  gpio_pin_state[gpio_pin_assign->pin_number] == GPIO_PIN_STATE_DIGITAL_OUT){
++    RELEASE_LOCK(bank_lock);
++    return GPIO_MISCONFIGURED_PIN ;
++  }
++
++  reg_update_unset(gpio_pin_assign->pin_number,AM335X_GPIO_DATAOUT);
 + 
-+ reg_update_unset(gpio_pin_assign->pin_number,AM335X_GPIO_DATAOUT);
-+ return 0;
++  RELEASE_LOCK(bank_lock);
++  return GPIO_SUCCESSFUL;
 +}
 +/**
 + * @brief Releases currently configured pin and makes unused for repurposing.
-+ * @retval 0 Pin was released successfully.
-+ * @retval 2 The received pin is already configured as an unused.
++ * @retval GPIO_SUCCESSFUL Pin was released successfully or it is already 
++ *         UNCONFIGURED state.
++ *
 + */
-+int rtems_gpio_release_pin(gpio_pin_handle *gpio_pin_assign)
-+{
-+ if (!gpio_pin_assign->pinen)
-+   return 2;
++int rtems_gpio_release_pin(gpio_pin_handle *gpio_pin_assign){
 +
-+ gpio_pin_assign->pinen = FALSE;
++  OBTAIN_LOCK(bank_lock);
++  if (
++  gpio_pin_state[gpio_pin_assign->pin_number] == GPIO_PIN_STATE_UNCONFIGURED){
++    RELEASE_LOCK(bank_lock);
++    return GPIO_SUCCESSFUL;
++  }
++ 
++  OBTAIN_LOCK(bank_lock);
++ 
++  gpio_pin_state[gpio_pin_assign->pin_number] = GPIO_PIN_STATE_UNCONFIGURED;
++  reg_update_set(gpio_pin_assign->pin_number,AM335X_GPIO_OE);
 +
-+ reg_update_set(gpio_pin_assign->pin_number,AM335X_GPIO_OE);
-+ return 0;
++  RELEASE_LOCK(bank_lock);
++  return GPIO_SUCCESSFUL;
 +}
 \ No newline at end of file
 diff --git a/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h b/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h
 new file mode 100644
-index 0000000..b1d372d
+index 0000000..1265828
 --- /dev/null
 +++ b/c/src/lib/libbsp/arm/beagle/include/beagleboneblack.h
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,63 @@
 +/**
 + * @file
 + *
 + * @ingroup arm_beagle
 + *
-+ * @brief Global BSP definitions.
++ * @brief BeagleBone Black BSP definitions.
 + */
 +
 +/**
@@ -167,6 +259,10 @@ index 0000000..b1d372d
 +
 +#ifndef LIBBSP_ARM_BEAGLE_BEAGLEBONEBLACK_H
 +#define LIBBSP_ARM_BEAGLE_BEAGLEBONEBLACK_H
++
++/* BSP related specifications */
++#define GPIO_PIN_COUNT 128
++#define GPIO_PINS_PER_BANK 32 
 +
 +/* USER LEDs of BeagleBone Black */
 +#define BBB_LED_USR0  53 /* USR LED0 */
@@ -224,28 +320,16 @@ index dd1ec95..7802724 100644
  $(PROJECT_INCLUDE)/libcpu/arm-cp15.h: ../../../libcpu/arm/shared/include/arm-cp15.h $(PROJECT_INCLUDE)/libcpu/$(dirstamp)
  	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
  PREINSTALL_FILES += $(PROJECT_INCLUDE)/libcpu/arm-cp15.h
-diff --git a/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img
-new file mode 100644
-index 0000000..93908dd
-Binary files /dev/null and b/c/src/lib/libbsp/arm/beagle/simscripts/bone_gpio.exe-sdcard.img differ
-diff --git a/c/src/lib/libbsp/arm/beagle/simscripts/bone_hello.exe-sdcard.img b/c/src/lib/libbsp/arm/beagle/simscripts/bone_hello.exe-sdcard.img
-new file mode 100644
-index 0000000..7f492eb
-Binary files /dev/null and b/c/src/lib/libbsp/arm/beagle/simscripts/bone_hello.exe-sdcard.img differ
-diff --git a/c/src/lib/libbsp/bfin/acinclude.m4 b/c/src/lib/libbsp/bfin/acinclude.m4
-deleted file mode 100644
-index ab6082e..0000000
 diff --git a/c/src/lib/libcpu/arm/shared/include/am335x.h b/c/src/lib/libcpu/arm/shared/include/am335x.h
-index 1f638bd..d4cea8e 100644
+index 37c5eeb..ebaa703 100644
 --- a/c/src/lib/libcpu/arm/shared/include/am335x.h
 +++ b/c/src/lib/libcpu/arm/shared/include/am335x.h
-@@ -279,4 +279,24 @@
- #define AM335X_WDT_WWPS                0x34
-     /* Command posted status */
- #define AM335X_WDT_WSPR                0x48
--    /* Activate/deactivate sequence */
-+    /* Activate/deactivate sequence */ 
-+    /* For BeagleBone Black GPIO*/
+@@ -300,3 +300,23 @@
+ 
+ #define AM335X_RTC_KICK0_KEY    0x83E70B13
+ #define AM335X_RTC_KICK1_KEY    0x95A4F1E0
++
++    /*Gpio memory registers am335x*/
 +#define AM335X_GPIO0                  0x44E07000
 +    /* GPIO Bank 0 base Register */
 +#define AM335X_GPIO1                  0x4804C000
@@ -255,16 +339,15 @@ index 1f638bd..d4cea8e 100644
 +#define AM335X_GPIO3                  0x481AE000
 +    /* GPIO Bank 3 base Register */
 +#define AM335X_GPIO_OE                0x134
-+     /* GPIO Output Enable Register */
++    /* GPIO Output Enable Register */
 +#define AM335X_GPIO_DATAOUT           0x13C
-+      /* GPIO Output pin set Register */
++    /* GPIO Output pin set Register */
 +#define AM335X_GPIO_DATAIN            0x138
-+      /* GPIO Read Data Register */
++    /* GPIO Read Data Register */
 +#define AM335X_GPIO_CLEARDATAOUT      0x190
-+      /* GPIO Output Clear Register */
++    /* GPIO Output Clear Register */
 +#define AM335X_GPIO_SETDATAOUT        0x194
-+       /* GPIO Output Set Register */
-+ /*Gpio memory registers am335x*/
++    /* GPIO Output Set Register */
 \ No newline at end of file
 diff --git a/cpukit/Makefile.am b/cpukit/Makefile.am
 index c9a4e0f..1f4e1f2 100644
@@ -282,10 +365,10 @@ index c9a4e0f..1f4e1f2 100644
  
 diff --git a/cpukit/include/rtems/gpio.h b/cpukit/include/rtems/gpio.h
 new file mode 100644
-index 0000000..b75a1b0
+index 0000000..a0b2c26
 --- /dev/null
 +++ b/cpukit/include/rtems/gpio.h
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,66 @@
 +/**
 + * @file rtems/gpio.h
 + *
@@ -315,6 +398,10 @@ index 0000000..b75a1b0
 +#define GPIO_UNCONFIGURED_PIN  2 /* pin unable to configure */
 +#define GPIO_MISCONFIGURED_PIN 3 /* pin configuration can't match operation */
 +
++/* Possible GPIO Pin States */
++#define GPIO_PIN_STATE_UNCONFIGURED 0
++#define GPIO_PIN_STATE_DIGITAL_OUT  1
++#define GPIO_PIN_STATE_DIGITAL_IN   2
 +
 +/**
 + * @brief Structure contains all the required members for GPIO access.
@@ -322,18 +409,18 @@ index 0000000..b75a1b0
 +typedef struct
 +{
 +  int   pin_number;/* The pin number. */
-+  bool  output;    /* True for output, false for input. */
-+  bool  on;        /* True default output is on */
-+  bool  pinen;     /* True for pin enable on, false for off. */
-+  bool  pullup;    /* True to enable the pull up. */
-+  bool  tristate;  /* True to enable tri-state. */
 +  void* platform;  /* Opaque hardware specific set up details. */
 +} gpio_pin_handle;
 +
 +/**
-+ * @brief Selects a GPIO pin for a specific function.
++ * @brief Initializes the GPIO API.
 + */
-+extern int rtems_gpio_configure_pin_digital_out(gpio_pin_handle *, unsigned int pin_number);
++extern void rtems_gpio_initialize(void);
++/**
++ * @brief Selects a GPIO pin for a digital output.
++ */
++extern int rtems_gpio_configure_pin_digital_out(
++	gpio_pin_handle *, unsigned int );
 +/**
 + * @brief Turns on the given pin.
 + */
@@ -343,7 +430,7 @@ index 0000000..b75a1b0
 + */
 +extern int rtems_gpio_digital_clear(gpio_pin_handle *);
 +/**
-+ * @brief currently configured pin is released and made unused for repurposing.
++ * @brief currently configured pin is released and made UNCONFIGURED.
 + */
 +extern int rtems_gpio_release_pin(gpio_pin_handle *);
 +
@@ -365,7 +452,7 @@ index 0758ec5..4a58fe7 100644
  	$(INSTALL_DATA) $< $(PROJECT_INCLUDE)/rtems/imfs.h
  PREINSTALL_FILES += $(PROJECT_INCLUDE)/rtems/imfs.h
 diff --git a/testsuites/samples/Makefile.am b/testsuites/samples/Makefile.am
-index 08455d3..de4f351 100644
+index 374617b..772fa0d 100644
 --- a/testsuites/samples/Makefile.am
 +++ b/testsuites/samples/Makefile.am
 @@ -1,6 +1,6 @@
@@ -377,10 +464,10 @@ index 08455d3..de4f351 100644
  if MPTESTS
  ## base_mp is a sample multiprocessing test
 diff --git a/testsuites/samples/configure.ac b/testsuites/samples/configure.ac
-index e6f12d0..ac32583 100644
+index 91a3661..aacc405 100644
 --- a/testsuites/samples/configure.ac
 +++ b/testsuites/samples/configure.ac
-@@ -60,6 +60,7 @@ AC_CHECK_SIZEOF([time_t])
+@@ -62,6 +62,7 @@ AC_CHECK_SIZEOF([time_t])
  AC_CONFIG_FILES([Makefile
  base_sp/Makefile
  hello/Makefile
@@ -440,10 +527,10 @@ index 0000000..057ab6e
 +*** END OF GPIO TEST ***
 diff --git a/testsuites/samples/gpio/init.c b/testsuites/samples/gpio/init.c
 new file mode 100644
-index 0000000..18ba8e9
+index 0000000..acf6bd9
 --- /dev/null
 +++ b/testsuites/samples/gpio/init.c
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,94 @@
 +/*
 + *  Copyright (c) 2015 Ketul Shah <ketulshah1993 at gmail.com>
 + *
@@ -464,7 +551,7 @@ index 0000000..18ba8e9
 +
 +static void inline delay_sec(int sec)
 +{
-+ rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
++  rtems_task_wake_after(sec*rtems_clock_get_ticks_per_second());
 +}
 +/* forward declarations to avoid warnings */
 +rtems_task Init(rtems_task_argument argument);
@@ -475,56 +562,64 @@ index 0000000..18ba8e9
 +  rtems_task_argument ignored
 +)
 +{
-+ rtems_test_begin();
-+ printf("Starting Gpio Testing\n");
++  rtems_test_begin();
++  printf("Starting Gpio Testing\n");
 + 
-+ static gpio_pin_handle led_usr0_handle,led_usr1_handle,led_usr2_handle,led_usr3_handle;
-+  /*Generation of USR LED pattern*/
-+ if (rtems_gpio_configure_pin_digital_out(&led_usr0_handle, BBB_LED_USR0) == GPIO_SUCCESSFUL) {
++  /* Intializing GPIO API */
++  rtems_gpio_initialize();
++  static gpio_pin_handle led_usr0_handle, led_usr1_handle, led_usr2_handle;
++  static gpio_pin_handle led_usr3_handle;
++  static unsigned int status;
++ 
++  status = rtems_gpio_configure_pin_digital_out(&led_usr0_handle, BBB_LED_USR0);
++  if (status == GPIO_SUCCESSFUL) {
 +    rtems_gpio_digital_set(&led_usr0_handle);
 +    delay_sec(1);
 +    rtems_gpio_digital_clear(&led_usr0_handle);
 +    delay_sec(1);
 +    rtems_gpio_release_pin(&led_usr0_handle);
-+ }
-+ if (rtems_gpio_configure_pin_digital_out(&led_usr1_handle, BBB_LED_USR1) == GPIO_SUCCESSFUL) {
++  }
++  status = rtems_gpio_configure_pin_digital_out(&led_usr1_handle, BBB_LED_USR1);
++  if (status == GPIO_SUCCESSFUL) {
 +    rtems_gpio_digital_set(&led_usr1_handle);
 +    delay_sec(1);
 +    rtems_gpio_digital_clear(&led_usr1_handle);
 +    delay_sec(1);
 +    rtems_gpio_release_pin(&led_usr1_handle);
-+
-+ }
-+ if (rtems_gpio_configure_pin_digital_out(&led_usr2_handle, BBB_LED_USR2) == GPIO_SUCCESSFUL) {
++  }
++  status = rtems_gpio_configure_pin_digital_out(&led_usr2_handle, BBB_LED_USR2);
++  if (status == GPIO_SUCCESSFUL) {
 +    rtems_gpio_digital_set(&led_usr2_handle);
 +    delay_sec(1);
 +    rtems_gpio_digital_clear(&led_usr2_handle);
 +    delay_sec(1);
 +    rtems_gpio_release_pin(&led_usr2_handle);
-+
-+ }
-+ if (rtems_gpio_configure_pin_digital_out(&led_usr3_handle, BBB_LED_USR3) == GPIO_SUCCESSFUL) {
++  }
++  status = rtems_gpio_configure_pin_digital_out(&led_usr3_handle, BBB_LED_USR3);
++  if (status == GPIO_SUCCESSFUL) {
 +    rtems_gpio_digital_set(&led_usr3_handle);
 +    delay_sec(1);
 +    rtems_gpio_digital_clear(&led_usr3_handle);
 +    delay_sec(1);
 +    rtems_gpio_release_pin(&led_usr3_handle);
-+
-+ }
-+ printf("Gpio Test Completed\n");
-+ rtems_test_end();
-+ exit( 0 );
++  }
++  printf("Gpio Test Completed\n");
++  rtems_test_end();
++  exit( 0 );
 +}
 +
 +/* NOTICE: the clock driver is enabled */
 +#define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
-+ 
 +#define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
 + 
 +#define CONFIGURE_MAXIMUM_TASKS            1
 +#define CONFIGURE_USE_DEVFS_AS_BASE_FILESYSTEM
++
++#define CONFIGURE_MAXIMUM_SEMAPHORES    1
 + 
-+#define CONFIGURE_RTEMS_INIT_TASKS_TABLE
++#define CONFIGURE_RTEMS_INIT_TASKS_TABLE 
++
++#define CONFIGURE_EXTRA_TASK_STACKS         (2 * RTEMS_MINIMUM_STACK_SIZE)
 + 
 +#define CONFIGURE_INITIAL_EXTENSIONS RTEMS_TEST_INITIAL_EXTENSION
 + 
